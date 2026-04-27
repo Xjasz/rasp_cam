@@ -8,6 +8,7 @@ DEVICE_KEY="${1:-}"
 
 cd "$APP_DIR"
 
+chmod +x install.sh
 if [ ! -f ".env" ] || [ ! -f ".venv/bin/activate" ]; then
     if [ -z "$DEVICE_KEY" ]; then
         echo "Missing install files. Run one of these:"

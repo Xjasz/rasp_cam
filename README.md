@@ -2,39 +2,40 @@
 
 Raspberry Pi camera client for Codalata RASP.
 
-## One-line intial install
+## Install options
 
-```bash
-git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && chmod +x install.sh run.sh && ./install.sh "YOUR_DEVICE_KEY"
-```
-## One-line service install
-```bash
-git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && chmod +x install_service.sh && ./install_service.sh "YOUR_DEVICE_KEY"
-```
+Use the normal install if you want to start the camera manually.
 
-## Optional setp by step Install
+Use the service install if you want the camera to start automatically when the Raspberry Pi boots.
 
-Clone the repo:
+## Step-by-step manual install
 
 ```bash
 git clone https://github.com/xjasz/rasp_cam.git
 cd rasp_cam
-```
-
-Install with your generated device key:
-
-```bash
-chmod +x install.sh run.sh
 ./install.sh "YOUR_DEVICE_KEY"
-```
-
-Start the camera:
-
-```bash
 ./run.sh
 ```
 
-Useful commands:
+## Step-by-step service install
+
+```bash
+git clone https://github.com/xjasz/rasp_cam.git
+cd rasp_cam
+./install_service.sh "YOUR_DEVICE_KEY"
+```
+
+## One-line installs
+manual:
+```bash
+git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && bash ./install.sh "YOUR_DEVICE_KEY"
+```
+service:
+```bash
+git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && bash ./install_service.sh "YOUR_DEVICE_KEY"
+```
+
+## Service commands
 
 ```bash
 sudo systemctl status codalata-rasp-cam
@@ -50,7 +51,11 @@ sudo systemctl stop codalata-rasp-cam
 cam_main.py
 requirements.txt
 install.sh
+install_service.sh
+uninstall_service.sh
 run.sh
+scripts/
+  stop_existing.sh
 helpers/
   __init__.py
   colormod.py
@@ -76,11 +81,4 @@ python3-opencv
 python3-numpy
 requests
 adafruit-circuitpython-servokit
-```
-
-## Run again later
-
-```bash
-cd rasp_cam
-./run.sh
 ```
