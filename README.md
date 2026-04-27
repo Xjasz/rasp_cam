@@ -33,7 +33,7 @@ CTRL+C
 ## One-line install after boot
 
 ```bash
-git clone https://github.com/xjasz/rasp_cam.git && cd YOUR_REPO && chmod +x install.sh run.sh && ./install.sh "YOUR_DEVICE_KEY"
+git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && chmod +x install.sh run.sh && ./install.sh "YOUR_DEVICE_KEY"
 ```
 
 Then start it:
