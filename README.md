@@ -2,7 +2,13 @@
 
 Raspberry Pi camera client for Codalata RASP.
 
-## Install
+## One-line intial install
+
+```bash
+git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && chmod +x install.sh run.sh && ./install.sh "YOUR_DEVICE_KEY"
+```
+
+## Optional setp by step Install
 
 Clone the repo:
 
@@ -30,18 +36,6 @@ Stop it:
 CTRL+C
 ```
 
-## One-line install after boot
-
-```bash
-git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && chmod +x install.sh run.sh && ./install.sh "YOUR_DEVICE_KEY"
-```
-
-Then start it:
-
-```bash
-./run.sh
-```
-
 ## Repo files
 
 ```text
@@ -64,23 +58,14 @@ The installer creates a local `.env` file:
 RASP_DEVICE_KEY=YOUR_DEVICE_KEY
 ```
 
-Do not commit `.env`.
-
-`cam_main.py` reads the key from `RASP_DEVICE_KEY`.
-
 ## Dependencies
 
-The installer installs the Raspberry Pi camera/OpenCV packages through apt:
+The installer installs the Raspberry Pi camera/OpenCV packages through apt and app-specific Python packages through pip:
 
 ```text
 python3-picamera2
 python3-opencv
 python3-numpy
-```
-
-The installer installs app-specific Python packages through pip:
-
-```text
 requests
 adafruit-circuitpython-servokit
 ```
