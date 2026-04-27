@@ -8,16 +8,19 @@ if [ -z "$DEVICE_KEY" ]; then
     exit 1
 fi
 
-sudo apt update
-sudo apt install -y python3-venv python3-pip python3-picamera2 python3-opencv python3-numpy i2c-tools python3-smbus
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 was not found."
+    exit 1
+fi
 
-sudo raspi-config nonint do_i2c 0 || true
+if ! python3 -m venv --help >/dev/null 2>&1; then
+    sudo apt install -y python3-venv
+fi
 
 python3 -m venv --system-site-packages .venv
 
 . .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 printf "RASP_DEVICE_KEY=%s\n" "$DEVICE_KEY" > .env
 chmod 600 .env
