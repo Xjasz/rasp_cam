@@ -24,7 +24,8 @@ python -m pip install -r requirements.txt
 printf "RASP_DEVICE_KEY=%s\n" "$DEVICE_KEY" > .env
 chmod 600 .env
 
-chmod +x run.sh stop_existing.sh
+chmod +x run.sh install_service.sh uninstall_service.sh
+[ -f scripts/stop_existing.sh ] && chmod +x scripts/stop_existing.sh
 
 echo "Install complete..."
 echo "Start the camera with: ./run.sh"

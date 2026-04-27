@@ -3,9 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if [ -f "./stop_existing.sh" ]; then
-    chmod +x ./stop_existing.sh
-    ./stop_existing.sh
+if [ -f "./scripts/stop_existing.sh" ]; then
+    chmod +x ./scripts/stop_existing.sh
+    ./scripts/stop_existing.sh
 fi
 
 if [ ! -f ".env" ]; then

@@ -7,6 +7,10 @@ Raspberry Pi camera client for Codalata RASP.
 ```bash
 git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && chmod +x install.sh run.sh && ./install.sh "YOUR_DEVICE_KEY"
 ```
+## One-line service install
+```bash
+git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && chmod +x install_service.sh && ./install_service.sh "YOUR_DEVICE_KEY"
+```
 
 ## Optional setp by step Install
 
@@ -30,10 +34,14 @@ Start the camera:
 ./run.sh
 ```
 
-Stop it:
+Useful commands:
 
 ```bash
-CTRL+C
+sudo systemctl status codalata-rasp-cam
+journalctl -u codalata-rasp-cam -f
+sudo systemctl restart codalata-rasp-cam
+sudo systemctl stop codalata-rasp-cam
+./uninstall_service.sh
 ```
 
 ## Repo files
