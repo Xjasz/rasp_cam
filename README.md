@@ -16,23 +16,19 @@ cd rasp_cam
 ./install.sh "YOUR_DEVICE_KEY"
 ./run.sh
 ```
-
-## Step-by-step service install
-
+Add service later after manual install
 ```bash
-git clone https://github.com/xjasz/rasp_cam.git
-cd rasp_cam
-./install_service.sh "YOUR_DEVICE_KEY"
+./install.sh --service
 ```
 
 ## One-line installs
 manual:
 ```bash
-git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && bash ./install.sh "YOUR_DEVICE_KEY"
+git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && bash ./install.sh "YOUR_DEVICE_KEY" && bash ./run.sh
 ```
 service:
 ```bash
-git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && bash ./install_service.sh "YOUR_DEVICE_KEY"
+git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && bash ./install.sh "YOUR_DEVICE_KEY" --service
 ```
 
 ## Service commands
