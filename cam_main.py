@@ -24,6 +24,8 @@ SERVER_BASE_URL = "https://www.codalata.com/modules/rasp"
 UPLOAD_URL = f"{SERVER_BASE_URL}/upload_frame.php"
 POLL_EVENT_URL = f"{SERVER_BASE_URL}/poll_event.php"
 UPLOAD_PICTURE_URL = f"{SERVER_BASE_URL}/upload_picture.php"
+UPLOAD_TIMELINE24_URL = f"{SERVER_BASE_URL}/upload_timeline24.php"
+
 
 stream_enabled = True
 viewer_active = False
@@ -53,6 +55,7 @@ color_finder.enable_tolerance(True)
 # ---------------------------
 # Initialize Frame Lock
 # ---------------------------
+shutdown_event = threading.Event()
 frame_lock = threading.Lock()
 latest_jpeg = None
 latest_frame_id = 0
@@ -106,6 +109,9 @@ def reboot_device():
         subprocess.Popen(['/usr/bin/sudo', '/sbin/reboot'])
     except Exception as e:
         logger.error(f"Failed to reboot: {e}", exc_info=True)
+
+def seconds_to_next_hour():
+    return 3600 - int(time.time()) % 3600
 
 def move_servo(label, port, delta):
     global PAN_ANGLE, TILT_ANGLE
@@ -375,6 +381,46 @@ def upload_frame_event(jpeg_bytes, frame_id, enabled, pan, tilt):
         time.sleep(5)
         return False
 
+def upload_timeline24_event(jpeg_bytes):
+    try:
+        response = upload_session.post(
+            url=UPLOAD_TIMELINE24_URL,
+            data=jpeg_bytes,
+            headers={"Content-Type": "image/jpeg"},
+            timeout=(3, 10),
+        )
+        if response.status_code == 429:
+            try:
+                retry_after = int((response.json() or {}).get("retry_after", 60))
+            except Exception:
+                retry_after = 60
+            logger.info(f"timeline24 rate limited, retry_after={retry_after}s")
+            return max(retry_after, 60)
+        if response.status_code == 403:
+            logger.info(f"timeline24 disabled by server: {response.text[:200]}")
+            return seconds_to_next_hour() + 30
+        response.raise_for_status()
+        logger.info(f"timeline24 uploaded: {response.text[:200]}")
+        return seconds_to_next_hour() + 30
+    except Exception as ex:
+        logger.error(f"upload_timeline24 error: {ex}")
+        return 120
+
+def timeline_upload_process():
+    logger.info("Starting timeline_upload_process")
+    wait = 30
+    while not shutdown_event.wait(wait):
+        if not stream_enabled:
+            wait = 60
+            continue
+        with frame_lock:
+            jpeg_bytes = latest_jpeg
+        if jpeg_bytes is None:
+            wait = 60
+            continue
+        wait = max(60, upload_timeline24_event(jpeg_bytes))
+    logger.info("timeline_upload_process exiting")
+
 def take_still():
     logger.info("take_still requested")
     if not viewer_active:
@@ -505,7 +551,8 @@ def main():
         "frame_upload_process": start_thread(frame_upload_process, "FrameUpload"),
         "frame_capture_process": start_thread(frame_capture_process, "FrameCapture"),
         "poll_command_process": start_thread(poll_command_process, "PollCommand"),
-        "connectivity_check_process": start_thread(connectivity_check_process, "ConnectivityCheck")
+        "connectivity_check_process": start_thread(connectivity_check_process, "ConnectivityCheck"),
+        "timeline_upload_process": start_thread(timeline_upload_process, "TimelineUpload")
     }
     threading.Thread(target=monitor_threads, args=(threads,), daemon=True).start()
     try:
