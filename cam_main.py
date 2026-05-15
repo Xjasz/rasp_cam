@@ -8,6 +8,7 @@ from picamera2 import Picamera2
 
 from helpers.colormod import (ColorFinder, bump_color_tolerance, cycle_channel, apply_center_change, mask_values_from_center, overlay_legend_on_frame, legend_block)
 from helpers.main_logger import logger, application_error_handler
+from helpers.update_runner import handle_update_command
 
 try:
     from helpers.rasp_servo import ServoKit, ServoUnavailableError
@@ -19,6 +20,26 @@ except Exception as ex:
 DEVICE_KEY = os.getenv("RASP_DEVICE_KEY", "").strip() # Add your DEVICE_KEY generated from the server in the double quotes as an environment variable or in the double quotes.
 if not DEVICE_KEY:
     raise RuntimeError("Missing RASP_DEVICE_KEY. Run ./install.sh YOUR_DEVICE_KEY before starting.")
+
+def _read_app_version():
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+        with open(path, "r") as f:
+            return f.read().strip() or "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+def _detect_device_mode():
+    try:
+        result = subprocess.run(["systemctl", "is-enabled", "codalata-rasp-cam"],capture_output=True, text=True, timeout=3,)
+        if result.returncode == 0 and result.stdout.strip().startswith("enabled"):
+            return "service"
+    except Exception:
+        pass
+    return "manual"
+
+APP_VERSION = _read_app_version()
+DEVICE_MODE = _detect_device_mode()
 
 SERVER_BASE_URL = "https://www.codalata.com/modules/rasp"
 UPLOAD_URL = f"{SERVER_BASE_URL}/upload_frame.php"
@@ -92,7 +113,13 @@ def build_session():
     session = requests.Session()
     adapter = requests.adapters.HTTPAdapter(pool_connections=2,pool_maxsize=2,max_retries=0)
     session.mount("https://", adapter)
-    session.headers.update({"X-Device-Key": DEVICE_KEY,"User-Agent": "cam-client/1.0","Connection": "keep-alive"})
+    session.headers.update({
+        "X-Device-Key": DEVICE_KEY,
+        "X-Device-Version": APP_VERSION,
+        "X-Device-Mode": DEVICE_MODE,
+        "User-Agent": "cam-client/1.0",
+        "Connection": "keep-alive",
+    })
     return session
 
 def reset_poll_session():
@@ -278,7 +305,8 @@ def execute_command(command):
         "tolerance_up": bump_tolerance,
         "reset": reset_servos,
         "snap": take_still,
-        "reboot": reboot_device
+        "reboot": reboot_device,
+        "update": handle_update_command,
     }
     action = command_map.get(normalized)
     if action is None:
