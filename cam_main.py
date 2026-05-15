@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import threading
 import time
@@ -9,6 +10,7 @@ from picamera2 import Picamera2
 from helpers.colormod import (ColorFinder, bump_color_tolerance, cycle_channel, apply_center_change, mask_values_from_center, overlay_legend_on_frame, legend_block)
 from helpers.main_logger import logger, application_error_handler
 from helpers.update_runner import handle_update_command
+from helpers import version_manager
 
 try:
     from helpers.rasp_servo import ServoKit, ServoUnavailableError
@@ -21,25 +23,13 @@ DEVICE_KEY = os.getenv("RASP_DEVICE_KEY", "").strip() # Add your DEVICE_KEY gene
 if not DEVICE_KEY:
     raise RuntimeError("Missing RASP_DEVICE_KEY. Run ./install.sh YOUR_DEVICE_KEY before starting.")
 
-def _read_app_version():
-    try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
-        with open(path, "r") as f:
-            return f.read().strip() or "0.0.0"
-    except Exception:
-        return "0.0.0"
+APP_VERSION = version_manager.current_version()
+DEVICE_MODE = version_manager.detect_device_mode()
 
-def _detect_device_mode():
-    try:
-        result = subprocess.run(["systemctl", "is-enabled", "codalata-rasp-cam"],capture_output=True, text=True, timeout=3,)
-        if result.returncode == 0 and result.stdout.strip().startswith("enabled"):
-            return "service"
-    except Exception:
-        pass
-    return "manual"
-
-APP_VERSION = _read_app_version()
-DEVICE_MODE = _detect_device_mode()
+# Must run before the camera is initialized so two coexisting versions never fight over the picamera2 device.
+if version_manager.startup_decision() == "exit_silently":
+    logger.info("startup gate: a newer version is healthy -- stepping aside")
+    sys.exit(0)
 
 SERVER_BASE_URL = "https://www.codalata.com/modules/rasp"
 UPLOAD_URL = f"{SERVER_BASE_URL}/upload_frame.php"
@@ -306,7 +296,6 @@ def execute_command(command):
         "reset": reset_servos,
         "snap": take_still,
         "reboot": reboot_device,
-        "update": handle_update_command,
     }
     action = command_map.get(normalized)
     if action is None:
@@ -356,7 +345,9 @@ def poll_event():
         command = data.get("command", "none")
         if command_id > last_command_id:
             last_command_id = command_id
-            if command != "none":
+            if command == "update":
+                handle_update_command(data.get("payload_url", ""))
+            elif command != "none":
                 execute_command(command)
 
         entries = data.get("transient_entries", []) or []
@@ -583,6 +574,13 @@ def main():
         "timeline_upload_process": start_thread(timeline_upload_process, "TimelineUpload")
     }
     threading.Thread(target=monitor_threads, args=(threads,), daemon=True).start()
+    def _retire_old_versions():
+        time.sleep(15)
+        try:
+            version_manager.cleanup_older_siblings()
+        except Exception as ex:
+            logger.error("cleanup_older_siblings failed: %s", ex)
+    threading.Thread(target=_retire_old_versions, daemon=True).start()
     try:
         while True:
             time.sleep(60)
