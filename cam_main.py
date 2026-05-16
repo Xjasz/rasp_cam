@@ -31,7 +31,7 @@ if version_manager.startup_decision() == "exit_silently":
     logger.info("startup gate: a newer version is healthy -- stepping aside")
     sys.exit(0)
 
-SERVER_BASE_URL = "https://www.codalata.com/modules/rasp"
+SERVER_BASE_URL = "https://www.codalata.com/modules/device/rasp_camera"
 UPLOAD_URL = f"{SERVER_BASE_URL}/upload_frame.php"
 POLL_EVENT_URL = f"{SERVER_BASE_URL}/poll_event.php"
 UPLOAD_PICTURE_URL = f"{SERVER_BASE_URL}/upload_picture.php"
@@ -74,7 +74,7 @@ latest_frame_id = 0
 # Initialize Camera
 # ---------------------------
 picam2 = Picamera2()
-config = picam2.create_video_configuration(main={"format": "RGB888", "size": (800, 600)})
+config = picam2.create_video_configuration(main={"format": "RGB888", "size": (1280, 1024)})
 picam2.configure(config)
 picam2.set_controls({"FrameRate": 60})
 picam2.start()
