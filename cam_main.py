@@ -32,10 +32,10 @@ if version_manager.startup_decision() == "exit_silently":
     sys.exit(0)
 
 SERVER_BASE_URL = "https://www.codalata.com/modules/device/rasp_camera"
-UPLOAD_URL = f"{SERVER_BASE_URL}/upload_frame.php"
-POLL_EVENT_URL = f"{SERVER_BASE_URL}/poll_event.php"
-UPLOAD_PICTURE_URL = f"{SERVER_BASE_URL}/upload_picture.php"
-UPLOAD_TIMELINE24_URL = f"{SERVER_BASE_URL}/upload_timeline24.php"
+UPLOAD_URL = f"{SERVER_BASE_URL}/upload_frame"
+POLL_EVENT_URL = f"{SERVER_BASE_URL}/poll_event"
+UPLOAD_PICTURE_URL = f"{SERVER_BASE_URL}/upload_picture"
+UPLOAD_TIMELINE24_URL = f"{SERVER_BASE_URL}/upload_timeline24"
 
 
 stream_enabled = True
