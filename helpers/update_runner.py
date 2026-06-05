@@ -81,7 +81,12 @@ def _install_update(payload_url):
     # the camera. The reboot starts it cleanly.
     device_key = os.getenv("RASP_DEVICE_KEY", "")
     logger.info("update_runner: installing %s as a service", new_version)
-    subprocess.run(["bash", os.path.join(target, "install.sh"),device_key, "--service", "--no-start"],cwd=target, check=True, timeout=600)
+    result = subprocess.run(["bash", os.path.join(target, "install.sh"), device_key, "--service", "--no-start"], cwd=target, capture_output=True, text=True, timeout=600)
+    if result.stdout and result.stdout.strip():
+        logger.info("update_runner: install.sh output:\n%s", result.stdout.strip())
+    if result.returncode != 0:
+        logger.error("update_runner: install.sh FAILED (exit %s):\n%s", result.returncode, (result.stderr or "").strip())
+        raise RuntimeError("install.sh exited %s" % result.returncode)
     marker = os.path.join(own_install_dir, version_manager.DELAY_STARTUP_MARKER)
     try:
         with open(marker, "w") as f:

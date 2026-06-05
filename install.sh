@@ -67,6 +67,23 @@ chmod +x run.sh uninstall_service.sh 2>/dev/null || true
 [ -f scripts/stop_existing.sh ] && chmod +x scripts/stop_existing.sh
 
 if [ "$INSTALL_SERVICE" -eq 1 ]; then
+    # Passwordless sudo for the headless self-update + reboot paths. Run from the
+    # systemd service there is no tty, so plain sudo fails with "a password is
+    # required" -- which breaks both the Update button and remote reboot. Written
+    # once here during the (interactive) service install so future devices get it
+    # automatically. Covers exactly the commands install.sh / update_runner /
+    # stop_existing.sh / reboot_device invoke.
+    SUDOERS_FILE="/etc/sudoers.d/codalata-rasp-cam"
+    sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
+${APP_USER} ALL=(root) NOPASSWD: /sbin/reboot, /usr/sbin/reboot, /usr/bin/systemctl, /usr/bin/tee, /usr/bin/rm, /usr/bin/kill, /usr/bin/apt, /usr/bin/apt-get
+EOF
+    sudo chmod 440 "$SUDOERS_FILE"
+    if ! sudo visudo -cf "$SUDOERS_FILE" >/dev/null; then
+        echo "ERROR: sudoers drop-in failed validation -- removing it."
+        sudo rm -f "$SUDOERS_FILE"
+        exit 1
+    fi
+
     sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null <<EOF
 [Unit]
 Description=Codalata RASP Camera Client ${APP_VERSION}
