@@ -84,6 +84,9 @@ EOF
         exit 1
     fi
 
+    # aplay needs /dev/snd access; default 'pi' is in audio, a custom service user may not be.
+    sudo usermod -aG audio "$APP_USER" 2>/dev/null || true
+
     sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null <<EOF
 [Unit]
 Description=Codalata RASP Camera Client ${APP_VERSION}
