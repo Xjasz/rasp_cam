@@ -3,6 +3,7 @@ resources/video/*
 resources/data/*
 main_logger.log
 cam_main.service
+.wifi_reboot_stamp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

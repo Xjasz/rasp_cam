@@ -303,30 +303,77 @@ def execute_command(command):
         return
     action()
 
+WIFI_FAIL_THRESHOLD = 3
+WIFI_REBOOT_COOLDOWN_SECONDS = 1800
+# Stamp lives in the parent dir so it survives the self-update's fresh sibling clone (only .env is carried over).
+WIFI_REBOOT_STAMP = os.path.join(version_manager.parent_dir(), ".wifi_reboot_stamp")
+
+def connectivity_ok():
+    try:
+        return requests.get("https://www.google.com", timeout=10).status_code < 500
+    except requests.exceptions.RequestException:
+        return False
+
+def detect_network_stack():
+    # Restart only the unit that OWNS wlan0 - dhcpcd runs its own wpa_supplicant; a second instance cripples wlan0.
+    for unit in ("NetworkManager", "dhcpcd"):
+        if subprocess.run(['systemctl', 'is-active', '--quiet', unit], timeout=5).returncode == 0:
+            return unit
+    return None
+
+def restart_wifi_event():
+    unit = detect_network_stack()
+    if unit is None:
+        raise RuntimeError("no active NetworkManager or dhcpcd unit found")
+    logger.info(f"restart_wifi_event: restarting {unit}...")
+    # timeout guards a wedged stack hanging the restart forever; TimeoutExpired escalates like any failure.
+    result = subprocess.run(['/usr/bin/sudo', 'systemctl', 'restart', unit], capture_output=True, text=True, timeout=45)
+    if result.returncode != 0:
+        raise RuntimeError(f"systemctl restart {unit} failed rc={result.returncode} stderr={result.stderr.strip()[:200]}")
+    time.sleep(20)
+
+def reboot_allowed():
+    try:
+        with open(WIFI_REBOOT_STAMP) as f:
+            last = float(f.read().strip() or 0)
+    except Exception:
+        last = 0.0
+    return time.time() - last >= WIFI_REBOOT_COOLDOWN_SECONDS
+
 def attempt_restart_wifi(retries):
     for attempt in range(1, retries + 1):
         logger.info(f"Attempt {attempt} to restart WiFi...")
         try:
             restart_wifi_event()
+        except Exception as e:
+            logger.error(f"WiFi restart attempt {attempt} failed: {e}")
+            time.sleep(5)
+            continue
+        if connectivity_ok():
             logger.info("WiFi restarted successfully")
             return
-        except Exception as e:
-            logger.error(f"Failed to restart WiFi on attempt {attempt}: {e}")
-            if attempt < retries:
-                logger.info("Retrying WiFi restart...")
-                time.sleep(5)
-            else:
-                logger.critical("All attempts to restart WiFi have failed.")
-
-def restart_wifi_event():
-    logger.info("restart_wifi_event...")
-    try:
-        result = subprocess.run(['/usr/bin/sudo', 'ifconfig', 'wlan0', 'down'], capture_output=True, text=True)
-        time.sleep(10)
-        result = subprocess.run(['/usr/bin/sudo', 'ifconfig', 'wlan0', 'up'], capture_output=True, text=True)
-        time.sleep(5)
-    except Exception as e:
-        logger.error(f"Failed to restart WiFi: {e}", exc_info=True)
+        logger.warning(f"WiFi restart attempt {attempt}: stack restarted but still no connectivity")
+    if reboot_allowed():
+        # Last resort - clears a crashed brcmfmac firmware. Stamp survives the reboot so an outage can't loop it.
+        logger.critical("All WiFi restart attempts failed -- rebooting")
+        try:
+            with open(WIFI_REBOOT_STAMP, "w") as f:
+                f.write(str(time.time()))
+        except Exception as ex:
+            logger.error(f"failed to write reboot stamp: {ex}")
+        try:
+            result = subprocess.run(['/usr/bin/sudo', '/sbin/reboot'], capture_output=True, text=True, timeout=15)
+            if result.returncode != 0:
+                raise RuntimeError(f"rc={result.returncode} stderr={result.stderr.strip()[:200]}")
+        except Exception as ex:
+            # Reboot never happened - un-burn the cooldown so the next cycle can try again.
+            logger.critical(f"reboot command failed: {ex}")
+            try:
+                os.remove(WIFI_REBOOT_STAMP)
+            except Exception:
+                pass
+    else:
+        logger.critical("All WiFi restart attempts failed; reboot on cooldown -- retrying next cycle")
 
 def poll_event():
     global last_command_id, last_transient_seq, viewer_active, poll_failures
@@ -529,17 +576,20 @@ def frame_upload_process():
 def connectivity_check_process():
     logger.info("Starting connectivity_check_process")
     max_retries = 3
+    consecutive_failures = 0
     while True:
         try:
-            response = requests.get("https://www.google.com", timeout=10)
-            if response.status_code == 200:
-                logger.debug("Internet connectivity is fine")
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"No internet connectivity detected: {e}")
-            attempt_restart_wifi(max_retries)
+            if connectivity_ok():
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+                # One failed check can be upload congestion while a viewer streams - only recover on a real streak.
+                logger.warning(f"Connectivity check failed ({consecutive_failures}/{WIFI_FAIL_THRESHOLD})")
+                if consecutive_failures >= WIFI_FAIL_THRESHOLD:
+                    attempt_restart_wifi(max_retries)
+                    consecutive_failures = 0
         except Exception as e:
             logger.error(f"Unexpected error in connectivity check: {e}", exc_info=True)
-            attempt_restart_wifi(max_retries)
         time.sleep(60)
 
 def monitor_threads(threads):

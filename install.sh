@@ -87,6 +87,15 @@ EOF
     # aplay needs /dev/snd access; default 'pi' is in audio, a custom service user may not be.
     sudo usermod -aG audio "$APP_USER" 2>/dev/null || true
 
+    # brcmfmac power-save is a known SDIO-crash trigger under sustained TX (streaming). On
+    # NetworkManager systems this conf disables it declaratively on every connect. No-op elsewhere.
+    if [ -d /etc/NetworkManager/conf.d ]; then
+        sudo tee /etc/NetworkManager/conf.d/wifi-powersave-off.conf >/dev/null <<EOF
+[connection]
+wifi.powersave = 2
+EOF
+    fi
+
     sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null <<EOF
 [Unit]
 Description=Codalata RASP Camera Client ${APP_VERSION}
