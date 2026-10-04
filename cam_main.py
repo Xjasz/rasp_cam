@@ -43,6 +43,7 @@ viewer_active = False
 last_command_id = 0
 last_transient_seq = 0
 poll_failures = 0
+last_poll_ok = time.time()
 
 manual_control_enabled = True
 opencv_tracking_enabled = False
@@ -305,6 +306,7 @@ def execute_command(command):
 
 WIFI_FAIL_THRESHOLD = 3
 WIFI_REBOOT_COOLDOWN_SECONDS = 1800
+WIFI_POLL_FRESH_SECONDS = 90
 # Stamp lives in the parent dir so it survives the self-update's fresh sibling clone (only .env is carried over).
 WIFI_REBOOT_STAMP = os.path.join(version_manager.parent_dir(), ".wifi_reboot_stamp")
 
@@ -376,17 +378,18 @@ def attempt_restart_wifi(retries):
         logger.critical("All WiFi restart attempts failed; reboot on cooldown -- retrying next cycle")
 
 def poll_event():
-    global last_command_id, last_transient_seq, viewer_active, poll_failures
+    global last_command_id, last_transient_seq, viewer_active, poll_failures, last_poll_ok
     try:
         response = poll_session.get(POLL_EVENT_URL,params={"since": last_transient_seq, "_": str(int(time.time() * 1000))},timeout=(3, 5))
         if response.status_code >= 500:
             logger.error(f"poll_event server error: status={response.status_code}, body={response.text[:500]}")
             poll_failures = min(poll_failures + 1, 6)
-            time.sleep(min(30, 2 ** poll_failures))
+            time.sleep(min(8, 2 ** poll_failures))
             return
         response.raise_for_status()
         data = response.json()
         poll_failures = 0
+        last_poll_ok = time.time()
         viewer_active = bool(data.get("viewer_active", False))
         command_id = int(data.get("command_id", 0))
         command = data.get("command", "none")
@@ -413,23 +416,23 @@ def poll_event():
     except requests.exceptions.JSONDecodeError as ex:
         logger.error(f"poll_event invalid json: {ex}")
         poll_failures = min(poll_failures + 1, 6)
-        time.sleep(min(30, 2 ** poll_failures))
+        time.sleep(min(8, 2 ** poll_failures))
     except requests.exceptions.HTTPError as ex:
         response = ex.response
         body = response.text[:500] if response is not None else ""
         status = response.status_code if response is not None else "unknown"
         logger.error(f"poll_event http error: status={status}, body={body}")
         poll_failures = min(poll_failures + 1, 6)
-        time.sleep(min(30, 2 ** poll_failures))
+        time.sleep(min(8, 2 ** poll_failures))
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as ex:
         logger.warning(f"poll_event network error: {ex}")
         reset_poll_session()
         poll_failures = min(poll_failures + 1, 6)
-        time.sleep(min(30, 2 ** poll_failures))
+        time.sleep(min(8, 2 ** poll_failures))
     except Exception as ex:
         logger.error(f"poll_event unexpected error: {ex}", exc_info=True)
         poll_failures = min(poll_failures + 1, 6)
-        time.sleep(min(30, 2 ** poll_failures))
+        time.sleep(min(8, 2 ** poll_failures))
 
 def upload_frame_event(jpeg_bytes, frame_id, enabled, pan, tilt):
     try:
@@ -444,7 +447,7 @@ def upload_frame_event(jpeg_bytes, frame_id, enabled, pan, tilt):
         return True
     except Exception as ex:
         logger.error(f"upload_frame_request error: {ex}")
-        time.sleep(5)
+        time.sleep(1)
         return False
 
 def upload_timeline24_event(jpeg_bytes):
@@ -579,7 +582,8 @@ def connectivity_check_process():
     consecutive_failures = 0
     while True:
         try:
-            if connectivity_ok():
+            # A working poll proves the link is up.
+            if time.time() - last_poll_ok < WIFI_POLL_FRESH_SECONDS or connectivity_ok():
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
