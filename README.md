@@ -33,30 +33,38 @@ git clone https://github.com/xjasz/rasp_cam.git && cd rasp_cam && bash ./install
 
 ## Service commands
 
+The unit name carries the version from the `VERSION` file, for example `codalata-rasp-cam-1.4.2`.
+
 ```bash
-sudo systemctl status codalata-rasp-cam
-journalctl -u codalata-rasp-cam -f
-sudo systemctl restart codalata-rasp-cam
-sudo systemctl stop codalata-rasp-cam
+sudo systemctl status codalata-rasp-cam-<version>
+journalctl -u codalata-rasp-cam-<version> -f
+sudo systemctl restart codalata-rasp-cam-<version>
+sudo systemctl stop codalata-rasp-cam-<version>
 ./uninstall_service.sh
 ```
+
+`uninstall_service.sh` removes the unit and then deletes this install folder, including `.env` with the device key, five seconds later.
+
+The service install also writes `/etc/sudoers.d/codalata-rasp-cam` so the headless self-update and remote reboot can run `reboot`, `systemctl`, `tee` and `rm` without a password.
 
 ## Repo files
 
 ```text
 cam_main.py
+VERSION
 requirements.txt
 install.sh
-install_service.sh
 uninstall_service.sh
 run.sh
 scripts/
   stop_existing.sh
 helpers/
-  __init__.py
   colormod.py
   main_logger.py
+  rasp_audio.py
   rasp_servo.py
+  update_runner.py
+  version_manager.py
 ```
 
 ## Device key
@@ -69,7 +77,7 @@ RASP_DEVICE_KEY=YOUR_DEVICE_KEY
 
 ## Dependencies
 
-The installer installs the Raspberry Pi camera/OpenCV packages through apt and app-specific Python packages through pip:
+The installer creates a `.venv` with system site packages and pip-installs `requirements.txt` into it. It does not install picamera2, OpenCV or numpy; those come from Raspberry Pi OS (`sudo apt install python3-picamera2 python3-opencv python3-numpy` if they are missing):
 
 ```text
 python3-picamera2

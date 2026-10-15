@@ -3,6 +3,10 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_USER="${SUDO_USER:-$(id -un)}"
+if [ "$APP_USER" = "root" ]; then
+    echo "ERROR: run install.sh as the normal Pi user, not as root (it calls sudo itself where needed)."
+    exit 1
+fi
 
 # The version drives the systemd unit name so multiple versions can coexist
 # on one device during a self-update (see helpers/version_manager.py).
@@ -75,7 +79,7 @@ if [ "$INSTALL_SERVICE" -eq 1 ]; then
     # stop_existing.sh / reboot_device invoke.
     SUDOERS_FILE="/etc/sudoers.d/codalata-rasp-cam"
     sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
-${APP_USER} ALL=(root) NOPASSWD: /sbin/reboot, /usr/sbin/reboot, /usr/bin/systemctl, /usr/bin/tee, /usr/bin/rm, /usr/bin/kill, /usr/bin/apt, /usr/bin/apt-get
+${APP_USER} ALL=(root) NOPASSWD: /sbin/reboot, /usr/sbin/reboot, /usr/bin/systemctl, /usr/bin/tee, /usr/bin/rm
 EOF
     sudo chmod 440 "$SUDOERS_FILE"
     if ! sudo visudo -cf "$SUDOERS_FILE" >/dev/null; then
