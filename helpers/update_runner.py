@@ -38,7 +38,7 @@ def _install_update(payload_url):
     if not payload_url:
         logger.error("update_runner: server sent no payload_url -- aborting")
         return
-    if not payload_url.lower().startswith("https://github.com/xjasz/rasp_cam"):
+    if payload_url.lower().rstrip("/") not in ("https://github.com/xjasz/rasp_cam", "https://github.com/xjasz/rasp_cam.git"):
         logger.error("update_runner: payload_url is not the Xjasz/rasp_cam GitHub repo -- aborting: %s", payload_url)
         return
     if version_manager.detect_device_mode() != "service":
@@ -89,6 +89,9 @@ def _install_update(payload_url):
         logger.info("update_runner: install.sh output:\n%s", result.stdout.strip())
     if result.returncode != 0:
         logger.error("update_runner: install.sh FAILED (exit %s):\n%s", result.returncode, (result.stderr or "").strip())
+        new_unit = version_manager.unit_name(new_version)
+        subprocess.run(["sudo", "systemctl", "disable", new_unit], capture_output=True, timeout=30)
+        subprocess.run(["sudo", "rm", "-f", "/etc/systemd/system/%s.service" % new_unit], capture_output=True, timeout=30)
         shutil.rmtree(target, ignore_errors=True)
         raise RuntimeError("install.sh exited %s" % result.returncode)
     marker = os.path.join(own_install_dir, version_manager.DELAY_STARTUP_MARKER)

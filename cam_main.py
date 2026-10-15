@@ -143,6 +143,7 @@ def move_servo(label, port, delta):
             current_angle = rasp_servokit.getAngle(port)
             new_angle = (fallback if current_angle is None else current_angle) + delta
             rasp_servokit.setAngle(port, new_angle)
+            new_angle = rasp_servokit.getAngle(port) or new_angle
         if port == 0:
             PAN_ANGLE = new_angle
             logger.debug("%s pan=%s", label, PAN_ANGLE)

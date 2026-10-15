@@ -64,7 +64,7 @@ fi
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 if [ -n "$DEVICE_KEY" ]; then
-    printf "RASP_DEVICE_KEY=%s\n" "$DEVICE_KEY" > .env
+    ( umask 077; printf "RASP_DEVICE_KEY=%s\n" "$DEVICE_KEY" > .env )
 fi
 chmod 600 .env
 chmod +x run.sh uninstall_service.sh 2>/dev/null || true
@@ -75,11 +75,10 @@ if [ "$INSTALL_SERVICE" -eq 1 ]; then
     # systemd service there is no tty, so plain sudo fails with "a password is
     # required" -- which breaks both the Update button and remote reboot. Written
     # once here during the (interactive) service install so future devices get it
-    # automatically. Covers exactly the commands install.sh / update_runner /
-    # stop_existing.sh / reboot_device invoke.
+    # automatically. Covers the sudo calls of the headless update path (install.sh --no-start, update_runner, reboot).
     SUDOERS_FILE="/etc/sudoers.d/codalata-rasp-cam"
     sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
-${APP_USER} ALL=(root) NOPASSWD: /sbin/reboot, /usr/sbin/reboot, /usr/bin/systemctl, /usr/bin/tee, /usr/bin/rm
+${APP_USER} ALL=(root) NOPASSWD: /sbin/reboot, /usr/sbin/reboot, /usr/bin/systemctl, /usr/bin/tee, /usr/bin/rm, /usr/bin/chmod, /usr/sbin/visudo
 EOF
     sudo chmod 440 "$SUDOERS_FILE"
     if ! sudo visudo -cf "$SUDOERS_FILE" >/dev/null; then
