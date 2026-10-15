@@ -25,7 +25,7 @@ kill_if_self() {
 for pid in $pids; do
     if kill_if_self "$pid"; then
         echo "Stopping cam_main.py from $SELF_DIR (pid $pid)"
-        kill "$pid" 2>/dev/null || sudo kill "$pid" 2>/dev/null || true
+        kill "$pid" 2>/dev/null || true
     fi
 done
 
@@ -34,6 +34,6 @@ sleep 2
 for pid in $pids; do
     if kill -0 "$pid" 2>/dev/null && kill_if_self "$pid"; then
         echo "Force killing pid $pid"
-        kill -9 "$pid" 2>/dev/null || sudo kill -9 "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     fi
 done

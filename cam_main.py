@@ -1,5 +1,6 @@
 import os
 import sys
+import signal
 import subprocess
 import threading
 import time
@@ -142,6 +143,7 @@ def move_servo(label, port, delta):
             current_angle = rasp_servokit.getAngle(port)
             new_angle = (fallback if current_angle is None else current_angle) + delta
             rasp_servokit.setAngle(port, new_angle)
+            new_angle = rasp_servokit.getAngle(port) or new_angle
         if port == 0:
             PAN_ANGLE = new_angle
             logger.debug("%s pan=%s", label, PAN_ANGLE)
@@ -596,12 +598,12 @@ def connectivity_check_process():
             logger.error(f"Unexpected error in connectivity check: {e}", exc_info=True)
         time.sleep(60)
 
-def monitor_threads(threads):
+def monitor_threads(threads, targets):
     while True:
         for thread_name, thread in threads.items():
-            if not thread.is_alive():
+            if thread is None or not thread.is_alive():
                 logger.critical(f"Thread {thread_name} has stopped unexpectedly. Restarting...")
-                threads[thread_name] = start_thread(thread._target, thread_name)
+                threads[thread_name] = start_thread(targets[thread_name], thread_name)
         time.sleep(60)
 
 def start_thread(target_function, thread_name):
@@ -616,18 +618,20 @@ def start_thread(target_function, thread_name):
 def main():
     global upload_session, poll_session
     logger.info("Starting main")
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
     upload_session = build_session()
     poll_session = build_session()
     if rasp_servokit is not None:
         reset_servos()
-    threads = {
-        "frame_upload_process": start_thread(frame_upload_process, "FrameUpload"),
-        "frame_capture_process": start_thread(frame_capture_process, "FrameCapture"),
-        "poll_command_process": start_thread(poll_command_process, "PollCommand"),
-        "connectivity_check_process": start_thread(connectivity_check_process, "ConnectivityCheck"),
-        "timeline_upload_process": start_thread(timeline_upload_process, "TimelineUpload")
+    targets = {
+        "FrameUpload": frame_upload_process,
+        "FrameCapture": frame_capture_process,
+        "PollCommand": poll_command_process,
+        "ConnectivityCheck": connectivity_check_process,
+        "TimelineUpload": timeline_upload_process
     }
-    threading.Thread(target=monitor_threads, args=(threads,), daemon=True).start()
+    threads = {name: start_thread(fn, name) for name, fn in targets.items()}
+    threading.Thread(target=monitor_threads, args=(threads, targets), daemon=True).start()
     def _retire_old_versions():
         time.sleep(15)
         try:

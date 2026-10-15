@@ -1,5 +1,6 @@
 import inspect
 import logging
+import logging.handlers
 import os
 import sys
 import traceback
@@ -11,7 +12,7 @@ logger_level = 'DEBUG'
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
 log_filepath = os.path.join(os.getcwd(), logger_name + ".log")
-file_handler = logging.FileHandler(log_filepath, mode='a')
+file_handler = logging.handlers.RotatingFileHandler(log_filepath, maxBytes=5_000_000, backupCount=2)
 file_handler.setLevel(level=logger_level)
 file_handler.setFormatter(formatter)
 
@@ -43,8 +44,7 @@ def application_error_handler(e):
         'file_name': caller_frame.f_code.co_filename,
         'function_name': caller_frame.f_code.co_name,
         'line_number': caller_frame.f_lineno,
-        'stack_trace': stack_trace,
-        'locals': {key: str(value) for key, value in caller_frame.f_locals.items()}
+        'stack_trace': stack_trace
     }
 
     logger.error("---------================== Detailed Error Report ==================---------")
@@ -56,9 +56,6 @@ def application_error_handler(e):
     logger.error(f"Line Number: {error_details['line_number']}")
     logger.error("Stack Trace:")
     logger.error(error_details['stack_trace'])
-    logger.error("Local Variables:")
-    for var_name, var_value in error_details['locals'].items():
-        logger.error(f"    {var_name} = {var_value}")
     logger.error("---------================== End Error Report ==================---------")
     del frame
     del caller_frame
