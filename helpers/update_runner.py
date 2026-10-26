@@ -12,7 +12,6 @@ import shutil
 import signal
 import subprocess
 import time
-
 from helpers.main_logger import logger
 from helpers import version_manager
 
@@ -39,8 +38,7 @@ def _cleanup_pending():
 
 def _run_installer(target):
     command = ["bash", os.path.join(target, "install.sh"), "--service", "--no-start"]
-    process = subprocess.Popen(command, cwd=target, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    process = subprocess.Popen(command, cwd=target, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
         stdout, stderr = process.communicate(timeout=600)
     except BaseException:
@@ -61,11 +59,7 @@ def _run_installer(target):
 
 def _cleanup_failed_install(target, new_unit=None):
     if new_unit is not None:
-        commands = [
-            ["sudo", "systemctl", "disable", new_unit],
-            ["sudo", "rm", "-f", "/etc/systemd/system/%s.service" % new_unit],
-            ["sudo", "systemctl", "daemon-reload"],
-        ]
+        commands = [["sudo", "systemctl", "disable", new_unit],["sudo", "rm", "-f", "/etc/systemd/system/%s.service" % new_unit],["sudo", "systemctl", "daemon-reload"]]
         for command in commands:
             try:
                 subprocess.run(command, capture_output=True, timeout=30, check=True)
@@ -142,15 +136,12 @@ def _install_update(payload_url):
             f.flush()
             os.fsync(f.fileno())
         try:
-            subprocess.run(["sudo", "-n", "/sbin/reboot"], capture_output=True,
-                           text=True, timeout=15, check=True)
+            subprocess.run(["sudo", "-n", "/sbin/reboot"], capture_output=True, text=True, timeout=15, check=True)
         except subprocess.TimeoutExpired:
-            logger.critical("update_runner: reboot command timed out; the request may already be queued. "
-                            "Retained %s and the delay marker. Inspect reboot state before retrying.", target)
+            logger.critical("update_runner: reboot command timed out; the request may already be queued. Retained %s and the delay marker. Inspect reboot state before retrying.", target)
             return
     except InstallerCleanupError:
-        logger.critical("update_runner: retained %s because installer processes may still be running. "
-                        "Inspect the processes and staged service before retrying or rebooting.", target)
+        logger.critical("update_runner: retained %s because installer processes may still be running. Inspect the processes and staged service before retrying or rebooting.", target)
         raise
     except Exception:
         if marker_created:
@@ -160,5 +151,4 @@ def _install_update(payload_url):
                 logger.error("update_runner: could not remove delay marker %s: %s", marker, ex)
         _cleanup_failed_install(target, new_unit if installer_started else None)
         raise
-    logger.info("update_runner: update staged (%s -> %s). Reboot request accepted; "
-                "keeping the current camera running until shutdown.", own_version, new_version)
+    logger.info("update_runner: update staged (%s -> %s). Reboot request accepted; keeping the current camera running until shutdown.", own_version, new_version)
