@@ -9,6 +9,7 @@ for the post-reboot handoff.
 """
 import os
 import shutil
+import signal
 import subprocess
 import time
 
@@ -32,6 +33,38 @@ def _cleanup_pending():
             shutil.rmtree(pending)
         except Exception:
             pass
+
+def _run_installer(target):
+    command = ["bash", os.path.join(target, "install.sh"), "--service", "--no-start"]
+    process = subprocess.Popen(command, cwd=target, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=600)
+    except BaseException:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+def _cleanup_failed_install(target, new_unit=None):
+    if new_unit is not None:
+        commands = [
+            ["sudo", "systemctl", "disable", new_unit],
+            ["sudo", "rm", "-f", "/etc/systemd/system/%s.service" % new_unit],
+            ["sudo", "systemctl", "daemon-reload"],
+        ]
+        for command in commands:
+            try:
+                subprocess.run(command, capture_output=True, timeout=30, check=True)
+            except Exception as ex:
+                logger.error("update_runner: cleanup command failed: %s", ex)
+    try:
+        shutil.rmtree(target)
+    except Exception as ex:
+        logger.error("update_runner: could not remove failed install %s: %s", target, ex)
 
 def _install_update(payload_url):
     payload_url = (payload_url or "").strip()
@@ -65,35 +98,35 @@ def _install_update(payload_url):
         _cleanup_pending()
         return
     target = os.path.join(parent, "rasp_cam_" + new_version)
-    if os.path.exists(target):
+    new_unit = version_manager.unit_name(new_version)
+    unit_path = "/etc/systemd/system/%s.service" % new_unit
+    if os.path.lexists(target) or os.path.lexists(unit_path):
         logger.info("update_runner: %s already staged -- skipping", target)
         _cleanup_pending()
         return
-    os.rename(pending, target)
     env_src = os.path.join(own_install_dir, ".env")
-    if os.path.isfile(env_src):
+    if not os.path.isfile(env_src):
+        raise RuntimeError("current install has no .env to carry over")
+    os.rename(pending, target)
+    installer_started = False
+    try:
         shutil.copy2(env_src, os.path.join(target, ".env"))
-    else:
-        logger.warning("update_runner: no .env to carry over -- new version may ""be missing its device key")
-    for script in ("install.sh", "run.sh", "uninstall_service.sh","scripts/stop_existing.sh"):
-        script_path = os.path.join(target, script)
-        if os.path.isfile(script_path):
-            os.chmod(script_path, 0o755)
-
-    # --no-start: starting the new unit now would fight the running version for
-    # the camera. The reboot starts it cleanly.
-    device_key = os.getenv("RASP_DEVICE_KEY", "")
-    logger.info("update_runner: installing %s as a service", new_version)
-    result = subprocess.run(["bash", os.path.join(target, "install.sh"), device_key, "--service", "--no-start"], cwd=target, capture_output=True, text=True, timeout=600)
-    if result.stdout and result.stdout.strip():
-        logger.info("update_runner: install.sh output:\n%s", result.stdout.strip())
-    if result.returncode != 0:
-        logger.error("update_runner: install.sh FAILED (exit %s):\n%s", result.returncode, (result.stderr or "").strip())
-        new_unit = version_manager.unit_name(new_version)
-        subprocess.run(["sudo", "systemctl", "disable", new_unit], capture_output=True, timeout=30)
-        subprocess.run(["sudo", "rm", "-f", "/etc/systemd/system/%s.service" % new_unit], capture_output=True, timeout=30)
-        shutil.rmtree(target, ignore_errors=True)
-        raise RuntimeError("install.sh exited %s" % result.returncode)
+        os.chmod(os.path.join(target, ".env"), 0o600)
+        for script in ("install.sh", "run.sh", "uninstall_service.sh","scripts/stop_existing.sh"):
+            script_path = os.path.join(target, script)
+            if os.path.isfile(script_path):
+                os.chmod(script_path, 0o755)
+        logger.info("update_runner: installing %s as a service", new_version)
+        installer_started = True
+        result = _run_installer(target)
+        if result.stdout and result.stdout.strip():
+            logger.info("update_runner: install.sh output:\n%s", result.stdout.strip())
+        if result.returncode != 0:
+            logger.error("update_runner: install.sh FAILED (exit %s):\n%s", result.returncode, (result.stderr or "").strip())
+            raise RuntimeError("install.sh exited %s" % result.returncode)
+    except Exception:
+        _cleanup_failed_install(target, new_unit if installer_started else None)
+        raise
     marker = os.path.join(own_install_dir, version_manager.DELAY_STARTUP_MARKER)
     try:
         with open(marker, "w") as f:
