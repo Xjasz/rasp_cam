@@ -1,3 +1,4 @@
+import builtins
 import os
 from pathlib import Path
 import signal
@@ -59,8 +60,10 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.target / '.env').stat().st_mode & 0o777, 0o600)
         self.installer.assert_called_once_with(str(self.target))
         self.assertTrue((self.current / '.delay_startup').is_file())
-        self.reboot.assert_called_once_with(['sudo', '/sbin/reboot'], start_new_session=True)
-        self.exit.assert_called_once_with(0)
+        self.run.assert_any_call(['sudo', '-n', '/sbin/reboot'], capture_output=True,
+                                 text=True, timeout=15, check=True)
+        self.reboot.assert_not_called()
+        self.exit.assert_not_called()
 
     def test_nonzero_exit_cleans_and_allows_retry(self):
         self.installer.return_value = subprocess.CompletedProcess([], 1, '', 'failed')
@@ -70,7 +73,7 @@ class UpdateTests(unittest.TestCase):
         self.installer.return_value = subprocess.CompletedProcess([], 0, '', '')
         self.update()
         self.assertEqual(self.installer.call_count, 2)
-        self.exit.assert_called_once_with(0)
+        self.exit.assert_not_called()
 
     def test_timeout_cleans_and_does_not_log_key(self):
         self.installer.side_effect = subprocess.TimeoutExpired(['bash', 'install.sh', '--service', '--no-start'], 600)
@@ -148,6 +151,77 @@ class UpdateTests(unittest.TestCase):
         self.run.assert_not_called()
         self.assert_preserved()
 
+    def test_marker_creation_failure_rolls_back_without_reboot(self):
+        marker = self.current / '.delay_startup'
+        real_open = builtins.open
+        def open_file(path, *args, **kwargs):
+            if str(path) == str(marker):
+                raise OSError('disk full')
+            return real_open(path, *args, **kwargs)
+        with patch('builtins.open', side_effect=open_file):
+            self.update()
+        self.assertFalse(self.target.exists())
+        self.assert_preserved()
+        self.assertNotIn(['sudo', '-n', '/sbin/reboot'], [c.args[0] for c in self.run.call_args_list])
+
+    def test_marker_flush_failure_removes_partial_marker(self):
+        self.start_patch(update_runner.os, 'fsync', side_effect=OSError('disk full'))
+        self.update()
+        self.assertFalse(self.target.exists())
+        self.assert_preserved()
+        self.assertNotIn(['sudo', '-n', '/sbin/reboot'], [c.args[0] for c in self.run.call_args_list])
+
+    def test_existing_marker_is_not_overwritten_or_deleted(self):
+        marker = self.current / '.delay_startup'
+        marker.write_text('existing handoff')
+        self.update()
+        self.assertEqual(marker.read_text(), 'existing handoff')
+        self.assertFalse(self.target.exists())
+        self.assertNotIn(['sudo', '-n', '/sbin/reboot'], [c.args[0] for c in self.run.call_args_list])
+        self.exit.assert_not_called()
+
+    def test_failed_reboot_rolls_back_and_can_retry(self):
+        reboot_command = ['sudo', '-n', '/sbin/reboot']
+        for error in (subprocess.CalledProcessError(1, reboot_command), OSError('spawn failed')):
+            with self.subTest(error=type(error).__name__):
+                def run(command, **kwargs):
+                    if command == reboot_command:
+                        raise error
+                    return self.run_command(command, **kwargs)
+                self.run.side_effect = run
+                self.update()
+                self.assertFalse(self.target.exists())
+                self.assert_preserved()
+        self.run.side_effect = self.run_command
+        self.update()
+        self.assertTrue(self.target.is_dir())
+        self.assertTrue((self.current / '.delay_startup').is_file())
+        self.exit.assert_not_called()
+
+    def test_reboot_timeout_preserves_uncertain_handoff(self):
+        reboot_command = ['sudo', '-n', '/sbin/reboot']
+        def run(command, **kwargs):
+            if command == reboot_command:
+                raise subprocess.TimeoutExpired(command, 15)
+            return self.run_command(command, **kwargs)
+        self.run.side_effect = run
+        with self.assertLogs(update_runner.logger, level='CRITICAL') as captured:
+            self.update()
+        self.assertTrue(self.target.is_dir())
+        self.assertTrue((self.current / '.delay_startup').is_file())
+        self.assertTrue(any('may already be queued' in message for message in captured.output))
+        self.assertFalse(any(c.args[0][:3] == ['sudo', 'systemctl', 'disable'] for c in self.run.call_args_list))
+        self.exit.assert_not_called()
+
+    def test_unconfirmed_installer_shutdown_preserves_stage(self):
+        self.installer.side_effect = update_runner.InstallerCleanupError('still running')
+        with self.assertLogs(update_runner.logger, level='CRITICAL') as captured:
+            self.update()
+        self.assertTrue(self.target.is_dir())
+        self.assertTrue(any('before retrying or rebooting' in message for message in captured.output))
+        self.assert_preserved()
+        self.assertFalse(any(c.args[0][0] == 'sudo' for c in self.run.call_args_list))
+
 
 class InstallerTests(unittest.TestCase):
     def test_command_has_no_device_key_and_timeout_reaps_before_raising(self):
@@ -163,14 +237,38 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(popen.call_args.kwargs['start_new_session'])
         kill.assert_called_once_with(12345, signal.SIGKILL)
         self.assertEqual(process.communicate.call_count, 2)
+        self.assertEqual(process.communicate.call_args.kwargs, {"timeout": 10})
         self.assertNotIn('fake-secret', str(raised.exception))
+
+    def test_unconfirmed_shutdown_closes_pipes_without_unbounded_wait(self):
+        process = Mock(pid=12345)
+        process.communicate.side_effect = subprocess.TimeoutExpired(['bash', 'install.sh'], 10)
+        with patch.object(update_runner.subprocess, 'Popen', return_value=process), \
+             patch.object(update_runner.os, 'killpg'):
+            with self.assertRaises(update_runner.InstallerCleanupError):
+                update_runner._run_installer('/staging')
+        self.assertEqual([c.kwargs['timeout'] for c in process.communicate.call_args_list], [600, 10])
+        process.stdout.close.assert_called_once_with()
+        process.stderr.close.assert_called_once_with()
+        process.poll.assert_called_once_with()
 
     @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux process group check')
     def test_real_timeout_stops_installer_child(self):
+        self.run_timeout_fixture(detach=False)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux process group check')
+    def test_real_escaped_child_does_not_hang_cleanup(self):
+        self.run_timeout_fixture(detach=True)
+
+    def run_timeout_fixture(self, detach):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             child_pid_file = root / 'child.pid'
-            (root / 'child.py').write_text('import os, pathlib, time\npathlib.Path("child.pid").write_text(str(os.getpid()))\ntime.sleep(60)\n')
+            child_code = 'import os, pathlib, time\n'
+            if detach:
+                child_code += 'os.setsid()\n'
+            child_code += 'pathlib.Path("child.pid").write_text(str(os.getpid()))\ntime.sleep(60)\n'
+            (root / 'child.py').write_text(child_code)
             import shlex
             (root / 'install.sh').write_text(shlex.quote(sys.executable) + ' child.py &\nwait\n')
             real_popen = subprocess.Popen
@@ -190,13 +288,22 @@ class InstallerTests(unittest.TestCase):
                 return process
             try:
                 with patch.object(update_runner.subprocess, 'Popen', side_effect=spawn):
-                    with self.assertRaises(subprocess.TimeoutExpired):
+                    expected_error = update_runner.InstallerCleanupError if detach else subprocess.TimeoutExpired
+                    with self.assertRaises(expected_error):
                         update_runner._run_installer(td)
                 self.assertEqual(processes[0].returncode, -signal.SIGKILL)
                 child_stat = Path('/proc') / child_pid_file.read_text() / 'stat'
-                if child_stat.exists():
+                if child_stat.exists() and not detach:
                     self.assertIn(child_stat.read_text().split(') ', 1)[1].split()[0], ('Z', 'X'))
+                if detach:
+                    self.assertTrue(processes[0].stdout.closed)
+                    self.assertTrue(processes[0].stderr.closed)
             finally:
+                if child_pid_file.exists():
+                    try:
+                        os.kill(int(child_pid_file.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 for process in processes:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)

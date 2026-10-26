@@ -1,11 +1,11 @@
 """Device self-update runner (v1.1.0+).
 
-Triggered by the `update` command. The server hands the device the payload URL
-to clone from (keeps devices redirectable if the repo ever moves). Clones the
-latest version into a sibling dir, installs it as its own systemd unit
-(enabled, not started), marks this old version for delayed startup, reboots.
-On any failure the device stays on the current version. See version_manager
-for the post-reboot handoff.
+Triggered by the `update` command with the supported GitHub repository URL.
+Stages the latest version as an enabled, stopped systemd unit and writes the
+old version's delayed-start marker before requesting a reboot. The current
+camera keeps running until shutdown. Failed staging is rolled back; uncertain
+installer termination or reboot outcome retains the stage for inspection.
+See version_manager for the post-reboot handoff.
 """
 import os
 import shutil
@@ -15,6 +15,9 @@ import time
 
 from helpers.main_logger import logger
 from helpers import version_manager
+
+class InstallerCleanupError(RuntimeError):
+    pass
 
 def handle_update_command(payload_url):
     try:
@@ -42,10 +45,17 @@ def _run_installer(target):
         stdout, stderr = process.communicate(timeout=600)
     except BaseException:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.communicate()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate(timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as ex:
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            process.poll()
+            raise InstallerCleanupError("installer termination could not be confirmed") from ex
         raise
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
@@ -109,6 +119,8 @@ def _install_update(payload_url):
         raise RuntimeError("current install has no .env to carry over")
     os.rename(pending, target)
     installer_started = False
+    marker = os.path.join(own_install_dir, version_manager.DELAY_STARTUP_MARKER)
+    marker_created = False
     try:
         shutil.copy2(env_src, os.path.join(target, ".env"))
         os.chmod(os.path.join(target, ".env"), 0o600)
@@ -124,15 +136,29 @@ def _install_update(payload_url):
         if result.returncode != 0:
             logger.error("update_runner: install.sh FAILED (exit %s):\n%s", result.returncode, (result.stderr or "").strip())
             raise RuntimeError("install.sh exited %s" % result.returncode)
+        with open(marker, "x") as f:
+            marker_created = True
+            f.write(str(int(time.time())))
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            subprocess.run(["sudo", "-n", "/sbin/reboot"], capture_output=True,
+                           text=True, timeout=15, check=True)
+        except subprocess.TimeoutExpired:
+            logger.critical("update_runner: reboot command timed out; the request may already be queued. "
+                            "Retained %s and the delay marker. Inspect reboot state before retrying.", target)
+            return
+    except InstallerCleanupError:
+        logger.critical("update_runner: retained %s because installer processes may still be running. "
+                        "Inspect the processes and staged service before retrying or rebooting.", target)
+        raise
     except Exception:
+        if marker_created:
+            try:
+                os.remove(marker)
+            except OSError as ex:
+                logger.error("update_runner: could not remove delay marker %s: %s", marker, ex)
         _cleanup_failed_install(target, new_unit if installer_started else None)
         raise
-    marker = os.path.join(own_install_dir, version_manager.DELAY_STARTUP_MARKER)
-    try:
-        with open(marker, "w") as f:
-            f.write(str(int(time.time())))
-    except Exception as ex:
-        logger.error("update_runner: could not write delay marker: %s", ex)
-    logger.info("update_runner: update staged (%s -> %s). Rebooting now.",own_version, new_version)
-    subprocess.Popen(["sudo", "/sbin/reboot"], start_new_session=True)
-    os._exit(0)
+    logger.info("update_runner: update staged (%s -> %s). Reboot request accepted; "
+                "keeping the current camera running until shutdown.", own_version, new_version)
