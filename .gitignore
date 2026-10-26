@@ -2,6 +2,7 @@
 resources/video/*
 resources/data/*
 main_logger.log
+main_logger.log.*
 cam_main.service
 .wifi_reboot_stamp
 

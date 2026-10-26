@@ -1,19 +1,22 @@
 """Device self-update runner (v1.1.0+).
 
-Triggered by the `update` command. The server hands the device the payload URL
-to clone from (keeps devices redirectable if the repo ever moves). Clones the
-latest version into a sibling dir, installs it as its own systemd unit
-(enabled, not started), marks this old version for delayed startup, reboots.
-On any failure the device stays on the current version. See version_manager
-for the post-reboot handoff.
+Triggered by the `update` command with the supported GitHub repository URL.
+Stages the latest version as an enabled, stopped systemd unit and writes the
+old version's delayed-start marker before requesting a reboot. The current
+camera keeps running until shutdown. Failed staging is rolled back; uncertain
+installer termination or reboot outcome retains the stage for inspection.
+See version_manager for the post-reboot handoff.
 """
 import os
 import shutil
+import signal
 import subprocess
 import time
-
 from helpers.main_logger import logger
 from helpers import version_manager
+
+class InstallerCleanupError(RuntimeError):
+    pass
 
 def handle_update_command(payload_url):
     try:
@@ -33,10 +36,47 @@ def _cleanup_pending():
         except Exception:
             pass
 
+def _run_installer(target):
+    command = ["bash", os.path.join(target, "install.sh"), "--service", "--no-start"]
+    process = subprocess.Popen(command, cwd=target, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=600)
+    except BaseException:
+        try:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate(timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as ex:
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            process.poll()
+            raise InstallerCleanupError("installer termination could not be confirmed") from ex
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+def _cleanup_failed_install(target, new_unit=None):
+    if new_unit is not None:
+        commands = [["sudo", "systemctl", "disable", new_unit],["sudo", "rm", "-f", "/etc/systemd/system/%s.service" % new_unit],["sudo", "systemctl", "daemon-reload"]]
+        for command in commands:
+            try:
+                subprocess.run(command, capture_output=True, timeout=30, check=True)
+            except Exception as ex:
+                logger.error("update_runner: cleanup command failed: %s", ex)
+    try:
+        shutil.rmtree(target)
+    except Exception as ex:
+        logger.error("update_runner: could not remove failed install %s: %s", target, ex)
+
 def _install_update(payload_url):
     payload_url = (payload_url or "").strip()
     if not payload_url:
         logger.error("update_runner: server sent no payload_url -- aborting")
+        return
+    if payload_url.lower().rstrip("/") not in ("https://github.com/xjasz/rasp_cam", "https://github.com/xjasz/rasp_cam.git"):
+        logger.error("update_runner: payload_url is not the Xjasz/rasp_cam GitHub repo -- aborting: %s", payload_url)
         return
     if version_manager.detect_device_mode() != "service":
         logger.warning("update_runner: not a service install -- auto-update skipped")
@@ -62,37 +102,53 @@ def _install_update(payload_url):
         _cleanup_pending()
         return
     target = os.path.join(parent, "rasp_cam_" + new_version)
-    if os.path.exists(target):
+    new_unit = version_manager.unit_name(new_version)
+    unit_path = "/etc/systemd/system/%s.service" % new_unit
+    if os.path.lexists(target) or os.path.lexists(unit_path):
         logger.info("update_runner: %s already staged -- skipping", target)
         _cleanup_pending()
         return
-    os.rename(pending, target)
     env_src = os.path.join(own_install_dir, ".env")
-    if os.path.isfile(env_src):
-        shutil.copy2(env_src, os.path.join(target, ".env"))
-    else:
-        logger.warning("update_runner: no .env to carry over -- new version may ""be missing its device key")
-    for script in ("install.sh", "run.sh", "uninstall_service.sh","scripts/stop_existing.sh"):
-        script_path = os.path.join(target, script)
-        if os.path.isfile(script_path):
-            os.chmod(script_path, 0o755)
-
-    # --no-start: starting the new unit now would fight the running version for
-    # the camera. The reboot starts it cleanly.
-    device_key = os.getenv("RASP_DEVICE_KEY", "")
-    logger.info("update_runner: installing %s as a service", new_version)
-    result = subprocess.run(["bash", os.path.join(target, "install.sh"), device_key, "--service", "--no-start"], cwd=target, capture_output=True, text=True, timeout=600)
-    if result.stdout and result.stdout.strip():
-        logger.info("update_runner: install.sh output:\n%s", result.stdout.strip())
-    if result.returncode != 0:
-        logger.error("update_runner: install.sh FAILED (exit %s):\n%s", result.returncode, (result.stderr or "").strip())
-        raise RuntimeError("install.sh exited %s" % result.returncode)
+    if not os.path.isfile(env_src):
+        raise RuntimeError("current install has no .env to carry over")
+    os.rename(pending, target)
+    installer_started = False
     marker = os.path.join(own_install_dir, version_manager.DELAY_STARTUP_MARKER)
+    marker_created = False
     try:
-        with open(marker, "w") as f:
+        shutil.copy2(env_src, os.path.join(target, ".env"))
+        os.chmod(os.path.join(target, ".env"), 0o600)
+        for script in ("install.sh", "run.sh", "uninstall_service.sh","scripts/stop_existing.sh"):
+            script_path = os.path.join(target, script)
+            if os.path.isfile(script_path):
+                os.chmod(script_path, 0o755)
+        logger.info("update_runner: installing %s as a service", new_version)
+        installer_started = True
+        result = _run_installer(target)
+        if result.stdout and result.stdout.strip():
+            logger.info("update_runner: install.sh output:\n%s", result.stdout.strip())
+        if result.returncode != 0:
+            logger.error("update_runner: install.sh FAILED (exit %s):\n%s", result.returncode, (result.stderr or "").strip())
+            raise RuntimeError("install.sh exited %s" % result.returncode)
+        with open(marker, "x") as f:
+            marker_created = True
             f.write(str(int(time.time())))
-    except Exception as ex:
-        logger.error("update_runner: could not write delay marker: %s", ex)
-    logger.info("update_runner: update staged (%s -> %s). Rebooting now.",own_version, new_version)
-    subprocess.Popen(["sudo", "/sbin/reboot"], start_new_session=True)
-    os._exit(0)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            subprocess.run(["sudo", "-n", "/sbin/reboot"], capture_output=True, text=True, timeout=15, check=True)
+        except subprocess.TimeoutExpired:
+            logger.critical("update_runner: reboot command timed out; the request may already be queued. Retained %s and the delay marker. Inspect reboot state before retrying.", target)
+            return
+    except InstallerCleanupError:
+        logger.critical("update_runner: retained %s because installer processes may still be running. Inspect the processes and staged service before retrying or rebooting.", target)
+        raise
+    except Exception:
+        if marker_created:
+            try:
+                os.remove(marker)
+            except OSError as ex:
+                logger.error("update_runner: could not remove delay marker %s: %s", marker, ex)
+        _cleanup_failed_install(target, new_unit if installer_started else None)
+        raise
+    logger.info("update_runner: update staged (%s -> %s). Reboot request accepted; keeping the current camera running until shutdown.", own_version, new_version)
